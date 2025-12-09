@@ -43,6 +43,9 @@ dependencies {
     // JSON - Parsing and serialization
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // QR Code - Generation and encoding
+    implementation("com.google.zxing:core:3.5.3")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
