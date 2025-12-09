@@ -31,6 +31,10 @@ android {
 dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+
+    // Security - EncryptedSharedPreferences for secure storage
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
