@@ -35,6 +35,14 @@ dependencies {
     // Security - EncryptedSharedPreferences for secure storage
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    // Networking - HTTP client and REST API
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+
+    // JSON - Parsing and serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
