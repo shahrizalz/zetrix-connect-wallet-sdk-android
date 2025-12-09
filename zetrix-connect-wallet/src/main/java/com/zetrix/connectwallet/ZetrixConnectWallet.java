@@ -7,9 +7,11 @@ import com.zetrix.connectwallet.callbacks.MessageCallback;
 import com.zetrix.connectwallet.callbacks.WebSocketCallback;
 import com.zetrix.connectwallet.constants.ZetrixConstants;
 import com.zetrix.connectwallet.core.WalletSocket;
+import com.zetrix.connectwallet.helpers.DeepLinkHelper;
 import com.zetrix.connectwallet.helpers.SessionHelper;
 import com.zetrix.connectwallet.helpers.SocketDataBuilder;
 import com.zetrix.connectwallet.helpers.ValidationHelper;
+import com.zetrix.connectwallet.ui.QRCodeDialog;
 import com.zetrix.connectwallet.utils.CryptoUtils;
 import com.zetrix.connectwallet.utils.DeviceUtils;
 import com.zetrix.connectwallet.utils.StorageUtils;
@@ -19,6 +21,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -78,6 +81,7 @@ public class ZetrixConnectWallet {
 
     private final Context context;
     private final String appType;
+    private final boolean isQrcode;
     private final boolean testnet;
     private final String bridgeUrl;
 
@@ -91,6 +95,7 @@ public class ZetrixConnectWallet {
     private ZetrixConnectWallet(Builder builder) {
         this.context = builder.context.getApplicationContext();
         this.appType = builder.appType;
+        this.isQrcode = builder.isQrcode;
         this.testnet = builder.testnet;
         this.bridgeUrl = builder.bridgeUrl != null
                 ? builder.bridgeUrl
@@ -135,24 +140,29 @@ public class ZetrixConnectWallet {
     }
 
     /**
-     * Request authentication from wallet.
+     * Request authentication from wallet with QR code or deep link.
      * <p>
      * Opens the wallet app and requests the user to authenticate.
      * Returns the wallet address upon successful authentication.
      * </p>
      *
+     * @param qrCode   if true, show QR code for scanning; if false, use deep link
      * @param callback callback for authentication result
      */
-    public void auth(AuthCallback callback) {
+    public void auth(boolean qrCode, AuthCallback callback) {
         if (!ensureConnected(callback)) return;
 
         try {
             String sessionId = SessionHelper.createSessionId();
             String appName = DeviceUtils.getAppName(context);
+            String appPackageId = DeviceUtils.getAppPackageId(context);
             boolean isMobile = DeviceUtils.isMobile();
 
+            String authType = "H5_" + ZetrixConstants.Operations.BIND;
+
+            // Send bind request for authentication
             JSONObject bindData = new JSONObject();
-            bindData.put("type", "H5_" + ZetrixConstants.Operations.BIND);
+            bindData.put("type", authType);
             bindData.put("sessionId", sessionId);
             bindData.put("source", isMobile ? ZetrixConstants.TypeInfo.MOBILE_SOURCE : "");
 
@@ -190,12 +200,251 @@ public class ZetrixConnectWallet {
                 }
             });
 
-            // NOTE: In production, you would launch the wallet app here via deep link
-            // For now, the wallet needs to be opened manually by the user
+            // Launch wallet app or show QR code
+            if (qrCode) {
+                // For QR code: send H5_put to get rms token, then show QR
+                logger.info("Requesting QR code data from server");
+
+                Map<String, Object> qrParam = new HashMap<>();
+                qrParam.put("sessionId", sessionId);
+                qrParam.put("type", authType);
+
+                Map<String, Object> qrData = new HashMap<>();
+                qrData.put("icon", appPackageId);
+                qrData.put("host", appName);
+                qrData.put("type", authType);
+                qrParam.put("data", qrData);
+
+                JSONObject qrSocketData = SocketDataBuilder.createQrSocketData(qrParam, true);
+
+                walletSocket.send("H5_" + ZetrixConstants.Operations.SET_QR, qrSocketData, new MessageCallback() {
+                    @Override
+                    public void onResponse(JSONObject response) {
+                        try {
+                            String rms = response.optString("rms", "");
+                            if (!rms.isEmpty()) {
+                                // Format: "{rms}&{sessionId}&{type}"
+                                String qrCodeData = rms + "&" + sessionId + "&" + authType;
+                                logger.info("Showing QR code for authentication");
+                                QRCodeDialog.show(context, qrCodeData, appType);
+                            } else {
+                                logger.warning("No rms token in response, cannot generate QR code");
+                            }
+                        } catch (Exception e) {
+                            logger.severe("Error processing QR response", e);
+                        }
+                    }
+
+                    @Override
+                    public void onError(Exception error) {
+                        logger.severe("QR request failed", error);
+                    }
+                });
+            } else {
+                // Launch wallet app via deep link
+                logger.info("Launching wallet app via deep link");
+
+                // Build params for deep link (following Flutter pattern)
+                Map<String, Object> deepLinkParams = new HashMap<>();
+                deepLinkParams.put("linkTo", authType);
+                deepLinkParams.put("type", authType);
+                deepLinkParams.put("host", appName);
+                deepLinkParams.put("icon", appPackageId);
+                deepLinkParams.put("sessionId", sessionId);
+                deepLinkParams.put("source", isMobile ? ZetrixConstants.TypeInfo.MOBILE_SOURCE : "");
+
+                boolean launched = DeepLinkHelper.launchWalletApp(context, appType, testnet, deepLinkParams);
+                if (!launched) {
+                    logger.warning("Failed to launch wallet app - user may need to open it manually");
+                }
+            }
 
         } catch (JSONException e) {
             logger.severe("Error creating auth request", e);
             callback.onError("Error creating auth request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Request authentication from wallet using default method (deep link).
+     * <p>
+     * This is a convenience method that calls auth(false, callback).
+     * For QR code authentication, use auth(true, callback).
+     * </p>
+     *
+     * @param callback callback for authentication result
+     */
+    public void auth(AuthCallback callback) {
+        auth(false, callback);
+    }
+
+    /**
+     * Authenticate and sign message in a single operation.
+     * <p>
+     * This is a convenience method that combines authentication (bind) and message signing.
+     * The user authenticates and signs the message in one step.
+     * </p>
+     * <p>
+     * Follows Flutter SDK pattern from wallet_connect.dart lines 224-310.
+     * </p>
+     *
+     * @param message  the message to sign
+     * @param callback callback for auth and sign result
+     */
+    public void authAndSignMessage(String message, AuthAndSignCallback callback) {
+        if (!ensureConnected(callback)) return;
+
+        // Validate message parameter
+        if (message == null || message.isEmpty()) {
+            callback.onError("Required parameter missing: message");
+            return;
+        }
+
+        try {
+            String sessionId = SessionHelper.createSessionId();
+            String appName = DeviceUtils.getAppName(context);
+            String appPackageId = DeviceUtils.getAppPackageId(context);
+            boolean isMobile = DeviceUtils.isMobile();
+
+            String authAndSignType = "H5_" + ZetrixConstants.Operations.BIND_AND_SIGN_MESSAGE;
+
+            // Step 1: Send bind request first
+            logger.info("Sending bind request for authAndSignMessage: " + sessionId);
+            JSONObject bindData = new JSONObject();
+            bindData.put("type", authAndSignType);
+            bindData.put("sessionId", sessionId);
+
+            walletSocket.h5Bind(bindData, new MessageCallback() {
+                @Override
+                public void onResponse(JSONObject response) {
+                    logger.info("Bind request sent for authAndSignMessage");
+                }
+
+                @Override
+                public void onError(Exception error) {
+                    logger.warning("h5Bind failed for authAndSignMessage", error);
+                    // Don't fail the operation, continue with sign request
+                }
+            });
+
+            // Store session with empty address initially
+            StorageUtils.setAuthData(sessionId, "");
+
+            // Step 2: Send bindAndSignMessage request
+            logger.info("Sending bindAndSignMessage request");
+            Map<String, Object> socketParam = new HashMap<>();
+            socketParam.put("type", authAndSignType);
+            socketParam.put("linkTo", authAndSignType);
+            socketParam.put("host", appName);
+            socketParam.put("icon", appPackageId);
+            socketParam.put("sessionId", sessionId);
+            socketParam.put("source", isMobile ? ZetrixConstants.TypeInfo.MOBILE_SOURCE : "");
+            socketParam.put("message", message);
+
+            JSONObject socketData = new JSONObject(socketParam);
+
+            walletSocket.send("H5_" + ZetrixConstants.Operations.BIND_AND_SIGN_MESSAGE,
+                    socketData, new MessageCallback() {
+                @Override
+                public void onResponse(JSONObject response) {
+                    try {
+                        int code = response.optInt("code", -1);
+                        if (code == 0) {
+                            String resSessionId = response.optString("sessionId", sessionId);
+                            JSONObject data = response.optJSONObject("data");
+                            if (data != null) {
+                                String address = data.optString("address");
+                                String publicKey = data.optString("publicKey");
+                                String signData = data.optString("signData");
+
+                                // Store auth data
+                                StorageUtils.setAuthData(resSessionId, address);
+                                logger.info("AuthAndSignMessage successful: " + address);
+
+                                callback.onSuccess(resSessionId, address, publicKey, signData);
+                            } else {
+                                callback.onError("No data in response");
+                            }
+                        } else {
+                            String errorMsg = response.optString("message", "AuthAndSignMessage failed");
+                            callback.onError(errorMsg);
+                        }
+                    } catch (Exception e) {
+                        logger.severe("Error processing authAndSignMessage response", e);
+                        callback.onError("Error processing response: " + e.getMessage());
+                    }
+                }
+
+                @Override
+                public void onError(Exception error) {
+                    logger.severe("AuthAndSignMessage request failed", error);
+                    callback.onError(error.getMessage());
+                }
+            });
+
+            // Step 3: Launch wallet app or show QR code
+            if (isQrcode) {
+                // For QR code: send H5_put to get rms token, then show QR
+                logger.info("Requesting QR code data for authAndSignMessage");
+
+                Map<String, Object> qrParam = new HashMap<>();
+                qrParam.put("sessionId", sessionId);
+                qrParam.put("type", authAndSignType);
+
+                Map<String, Object> qrData = new HashMap<>();
+                qrData.put("icon", appPackageId);
+                qrData.put("host", appName);
+                qrData.put("message", message);
+                qrData.put("type", authAndSignType);
+                qrParam.put("data", qrData);
+
+                JSONObject qrSocketData = SocketDataBuilder.createQrSocketData(qrParam, true);
+
+                walletSocket.send("H5_" + ZetrixConstants.Operations.SET_QR, qrSocketData, new MessageCallback() {
+                    @Override
+                    public void onResponse(JSONObject response) {
+                        try {
+                            String rms = response.optString("rms", "");
+                            if (!rms.isEmpty()) {
+                                // Format: "{rms}&{sessionId}&{type}"
+                                String qrCodeData = rms + "&" + sessionId + "&" + authAndSignType;
+                                logger.info("Showing QR code for authAndSignMessage");
+                                QRCodeDialog.show(context, qrCodeData, appType);
+                            } else {
+                                logger.warning("No rms token in response, cannot generate QR code");
+                            }
+                        } catch (Exception e) {
+                            logger.severe("Error processing QR response for authAndSignMessage", e);
+                        }
+                    }
+
+                    @Override
+                    public void onError(Exception error) {
+                        logger.severe("QR request failed for authAndSignMessage", error);
+                    }
+                });
+            } else {
+                // Launch wallet app via deep link
+                logger.info("Launching wallet app via deep link for authAndSignMessage");
+
+                Map<String, Object> deepLinkParams = new HashMap<>();
+                deepLinkParams.put("linkTo", authAndSignType);
+                deepLinkParams.put("type", authAndSignType);
+                deepLinkParams.put("host", appName);
+                deepLinkParams.put("icon", appPackageId);
+                deepLinkParams.put("sessionId", sessionId);
+                deepLinkParams.put("source", isMobile ? ZetrixConstants.TypeInfo.MOBILE_SOURCE : "");
+                deepLinkParams.put("message", message);
+
+                boolean launched = DeepLinkHelper.launchWalletApp(context, appType, testnet, deepLinkParams);
+                if (!launched) {
+                    logger.warning("Failed to launch wallet app for authAndSignMessage");
+                }
+            }
+
+        } catch (JSONException e) {
+            logger.severe("Error creating authAndSignMessage request", e);
+            callback.onError("Error creating request: " + e.getMessage());
         }
     }
 
@@ -267,6 +516,17 @@ public class ZetrixConnectWallet {
                     callback.onError(error.getMessage());
                 }
             });
+
+            // Launch wallet app via deep link if not using QR code (following Flutter pattern)
+            if (!isQrcode) {
+                Map<String, Object> urlObj = new HashMap<>();
+                urlObj.put("linkTo", "H5_" + ZetrixConstants.Operations.SIGN_MESSAGE);
+                urlObj.put("sessionId", sessionId);
+                urlObj.put("host", appName);
+                urlObj.put("icon", "");
+
+                DeepLinkHelper.launchWalletApp(context, appType, testnet, urlObj);
+            }
 
         } catch (Exception e) {
             logger.severe("Error creating sign request", e);
@@ -342,6 +602,17 @@ public class ZetrixConnectWallet {
                     callback.onError(error.getMessage());
                 }
             });
+
+            // Launch wallet app via deep link if not using QR code (following Flutter pattern)
+            if (!isQrcode) {
+                Map<String, Object> urlObj = new HashMap<>();
+                urlObj.put("linkTo", "H5_" + ZetrixConstants.Operations.SIGN_BLOB);
+                urlObj.put("sessionId", sessionId);
+                urlObj.put("host", appName);
+                urlObj.put("icon", "");
+
+                DeepLinkHelper.launchWalletApp(context, appType, testnet, urlObj);
+            }
 
         } catch (Exception e) {
             logger.severe("Error creating sign blob request", e);
@@ -429,9 +700,230 @@ public class ZetrixConnectWallet {
                 }
             });
 
+            // Launch wallet app via deep link if not using QR code (following Flutter pattern)
+            if (!isQrcode) {
+                Map<String, Object> urlObj = new HashMap<>();
+                urlObj.put("linkTo", "H5_" + ZetrixConstants.Operations.SEND_TRANSACTION);
+                urlObj.put("sessionId", sessionId);
+                urlObj.put("host", appName);
+                urlObj.put("icon", "");
+                urlObj.put("tag", to);  // Include "to" address as tag (Flutter line 490)
+
+                DeepLinkHelper.launchWalletApp(context, appType, testnet, urlObj);
+            }
+
         } catch (Exception e) {
             logger.severe("Error creating transaction request", e);
             callback.onError("Error creating transaction request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Request wallet to verify a Verifiable Credential (VC).
+     * <p>
+     * Verifiable Credentials are digital credentials that can be cryptographically verified.
+     * This method requests the wallet to verify a VC against a specific template.
+     * </p>
+     * <p>
+     * Follows Flutter SDK pattern from wallet_connect.dart lines 501-580.
+     * </p>
+     *
+     * @param templateId the VC template ID to verify against
+     * @param callback   callback for verification result
+     */
+    public void verifyVC(String templateId, VCCallback callback) {
+        if (!ensureAuthenticated(callback)) return;
+
+        // Validate templateId parameter
+        if (templateId == null || templateId.isEmpty()) {
+            callback.onError("Required parameter missing: templateId");
+            return;
+        }
+
+        try {
+            String sessionId = StorageUtils.getSessionId();
+            String address = StorageUtils.getAddress();
+            String appName = DeviceUtils.getAppName(context);
+            boolean isMobile = DeviceUtils.isMobile();
+
+            String vcType = "H5_" + ZetrixConstants.Operations.VERIFY_VC;
+
+            // Build socket data
+            Map<String, Object> socketParam = new HashMap<>();
+            socketParam.put("type", vcType);
+            socketParam.put("sessionId", sessionId);
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("host", "");
+            data.put("icon", "");
+            data.put("address", address);
+            data.put("templateId", templateId);
+            data.put("source", isMobile ? ZetrixConstants.TypeInfo.MOBILE_SOURCE : "");
+            socketParam.put("data", data);
+
+            JSONObject socketData = new JSONObject(socketParam);
+
+            logger.info("Sending VerifyVC request");
+            walletSocket.send("H5_" + ZetrixConstants.Operations.VERIFY_VC,
+                    socketData, new MessageCallback() {
+                @Override
+                public void onResponse(JSONObject response) {
+                    try {
+                        int code = response.optInt("code", -1);
+                        if (code == 0) {
+                            JSONObject responseData = response.optJSONObject("data");
+                            if (responseData != null) {
+                                String status = responseData.optString("status");
+                                String details = responseData.optString("details");
+                                logger.info("VerifyVC successful: " + status);
+                                callback.onSuccess(status, details);
+                            } else {
+                                callback.onError("No data in response");
+                            }
+                        } else {
+                            String errorMsg = response.optString("message", "VerifyVC failed");
+                            logger.warning("VerifyVC rejected: " + errorMsg);
+                            callback.onError(errorMsg);
+                        }
+                    } catch (Exception e) {
+                        logger.severe("Error processing verifyVC response", e);
+                        callback.onError("Error processing response: " + e.getMessage());
+                    }
+                }
+
+                @Override
+                public void onError(Exception error) {
+                    logger.severe("VerifyVC request failed", error);
+                    callback.onError(error.getMessage());
+                }
+            });
+
+            // Launch wallet app via deep link if not using QR code
+            if (!isQrcode) {
+                Map<String, Object> urlObj = new HashMap<>();
+                urlObj.put("linkTo", vcType);
+                urlObj.put("type", vcType);
+                urlObj.put("sessionId", sessionId);
+                urlObj.put("host", appName);
+                urlObj.put("icon", "");
+                urlObj.put("address", address);
+                urlObj.put("templateId", templateId);
+
+                DeepLinkHelper.launchWalletApp(context, appType, testnet, urlObj);
+            }
+
+        } catch (Exception e) {
+            logger.severe("Error creating verifyVC request", e);
+            callback.onError("Error creating request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Request wallet to get a Verifiable Presentation (VP).
+     * <p>
+     * Verifiable Presentations are collections of verifiable credentials that can be
+     * cryptographically verified. This method requests the wallet to create a VP
+     * based on a template and specified attributes.
+     * </p>
+     * <p>
+     * Follows Flutter SDK pattern from wallet_connect.dart lines 582-671.
+     * </p>
+     *
+     * @param templateId the VP template ID
+     * @param attributes list of attributes to include in the VP
+     * @param callback   callback for VP result
+     */
+    public void getVP(String templateId, List<String> attributes, VPCallback callback) {
+        if (!ensureAuthenticated(callback)) return;
+
+        // Validate templateId parameter
+        if (templateId == null || templateId.isEmpty()) {
+            callback.onError("Required parameter missing: templateId");
+            return;
+        }
+
+        // Validate attributes parameter
+        if (attributes == null || attributes.isEmpty()) {
+            callback.onError("Required parameter missing or invalid: attributes (must be a non-empty list)");
+            return;
+        }
+
+        try {
+            String sessionId = StorageUtils.getSessionId();
+            String address = StorageUtils.getAddress();
+            String appName = DeviceUtils.getAppName(context);
+            boolean isMobile = DeviceUtils.isMobile();
+
+            String vpType = "H5_" + ZetrixConstants.Operations.GET_VP;
+
+            // Build socket data
+            Map<String, Object> socketParam = new HashMap<>();
+            socketParam.put("type", vpType);
+            socketParam.put("sessionId", sessionId);
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("host", "");
+            data.put("icon", "");
+            data.put("address", address);
+            data.put("templateId", templateId);
+            data.put("attributes", attributes);
+            data.put("source", isMobile ? ZetrixConstants.TypeInfo.MOBILE_SOURCE : "");
+            socketParam.put("data", data);
+
+            JSONObject socketData = new JSONObject(socketParam);
+
+            logger.info("Sending GetVP request");
+            walletSocket.send("H5_" + ZetrixConstants.Operations.GET_VP,
+                    socketData, new MessageCallback() {
+                @Override
+                public void onResponse(JSONObject response) {
+                    try {
+                        int code = response.optInt("code", -1);
+                        if (code == 0) {
+                            JSONObject responseData = response.optJSONObject("data");
+                            if (responseData != null) {
+                                String uuid = responseData.optString("uuid");
+                                logger.info("GetVP successful: " + uuid);
+                                callback.onSuccess(uuid);
+                            } else {
+                                callback.onError("No data in response");
+                            }
+                        } else {
+                            String errorMsg = response.optString("message", "GetVP failed");
+                            logger.warning("GetVP rejected: " + errorMsg);
+                            callback.onError(errorMsg);
+                        }
+                    } catch (Exception e) {
+                        logger.severe("Error processing getVP response", e);
+                        callback.onError("Error processing response: " + e.getMessage());
+                    }
+                }
+
+                @Override
+                public void onError(Exception error) {
+                    logger.severe("GetVP request failed", error);
+                    callback.onError(error.getMessage());
+                }
+            });
+
+            // Launch wallet app via deep link if not using QR code
+            if (!isQrcode) {
+                Map<String, Object> urlObj = new HashMap<>();
+                urlObj.put("linkTo", vpType);
+                urlObj.put("type", vpType);
+                urlObj.put("sessionId", sessionId);
+                urlObj.put("host", appName);
+                urlObj.put("icon", "");
+                urlObj.put("address", address);
+                urlObj.put("templateId", templateId);
+                urlObj.put("attributes", attributes);
+
+                DeepLinkHelper.launchWalletApp(context, appType, testnet, urlObj);
+            }
+
+        } catch (Exception e) {
+            logger.severe("Error creating getVP request", e);
+            callback.onError("Error creating request: " + e.getMessage());
         }
     }
 
@@ -458,13 +950,42 @@ public class ZetrixConnectWallet {
 
     /**
      * Disconnect from wallet and clear session data.
+     * <p>
+     * This method clears stored authentication data (sessionId, address).
+     * Use this when you want to fully disconnect and clear all session data.
+     * </p>
+     * <p>
+     * If you only want to close the WebSocket connection without clearing data,
+     * use {@link #closeConnect()} instead.
+     * </p>
      */
     public void disconnect() {
-        logger.info("Disconnecting from wallet");
+        logger.info("Disconnecting from wallet and clearing storage");
+        StorageUtils.disconnectRemoveStorage();
+    }
+
+    /**
+     * Close the WebSocket connection without clearing session data.
+     * <p>
+     * This method only closes the WebSocket connection but preserves
+     * stored authentication data (sessionId, address).
+     * </p>
+     * <p>
+     * Use this when you want to temporarily close the connection but
+     * keep the session data for reconnection later.
+     * </p>
+     * <p>
+     * If you want to fully disconnect and clear all data, use {@link #disconnect()} instead.
+     * </p>
+     * <p>
+     * Follows Flutter SDK pattern from wallet_connect.dart line 678-680.
+     * </p>
+     */
+    public void closeConnect() {
+        logger.info("Closing WebSocket connection");
         if (walletSocket != null) {
             walletSocket.disconnect();
         }
-        StorageUtils.disconnectRemoveStorage();
         connected = false;
     }
 
@@ -546,6 +1067,16 @@ public class ZetrixConnectWallet {
     }
 
     /**
+     * Authentication and signing callback.
+     * <p>
+     * Used for authAndSignMessage() which returns both auth and sign data.
+     * </p>
+     */
+    public interface AuthAndSignCallback extends BaseCallback {
+        void onSuccess(String sessionId, String address, String publicKey, String signData);
+    }
+
+    /**
      * Transaction callback.
      */
     public interface TransactionCallback extends BaseCallback {
@@ -559,6 +1090,26 @@ public class ZetrixConnectWallet {
         void onSuccess(long nonce);
     }
 
+    /**
+     * Verifiable Credential (VC) verification callback.
+     * <p>
+     * Used for verifyVC() which returns verification status and details.
+     * </p>
+     */
+    public interface VCCallback extends BaseCallback {
+        void onSuccess(String status, String details);
+    }
+
+    /**
+     * Verifiable Presentation (VP) callback.
+     * <p>
+     * Used for getVP() which returns a VP UUID.
+     * </p>
+     */
+    public interface VPCallback extends BaseCallback {
+        void onSuccess(String uuid);
+    }
+
     // ========== Builder Pattern ==========
 
     /**
@@ -567,6 +1118,7 @@ public class ZetrixConnectWallet {
     public static class Builder {
         private final Context context;
         private String appType = "zetrix";
+        private boolean isQrcode = false;
         private boolean testnet = false;
         private String bridgeUrl = null;
 
@@ -579,6 +1131,11 @@ public class ZetrixConnectWallet {
 
         public Builder setAppType(String appType) {
             this.appType = appType;
+            return this;
+        }
+
+        public Builder setQrcode(boolean isQrcode) {
+            this.isQrcode = isQrcode;
             return this;
         }
 
