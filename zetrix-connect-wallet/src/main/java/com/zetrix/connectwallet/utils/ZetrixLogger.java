@@ -1,5 +1,6 @@
 package com.zetrix.connectwallet.utils;
 
+import android.annotation.SuppressLint;
 import android.util.Log;
 
 import java.util.HashMap;
@@ -161,6 +162,7 @@ public class ZetrixLogger {
      *
      * @param message the log message
      */
+    @SuppressLint({"LogTagMismatch"})
     public void fine(String message) {
         if (isLoggable(Level.FINE)) {
             Log.d(tag, message);

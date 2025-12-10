@@ -19,6 +19,7 @@ import com.zetrix.connectwallet.ZetrixConnectWallet
 import com.zetrix.connectwallet.callbacks.WebSocketCallback
 import com.zetrix.connectwallet.utils.DeviceUtils
 import com.zetrix.connectwallet.utils.StorageUtils
+import com.zetrix.connectwallet.utils.ZetrixLogger
 import org.json.JSONObject
 import java.util.Arrays
 import kotlinx.coroutines.CoroutineScope
@@ -33,13 +34,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize SDK with Application context (recommended)
-        // The SDK now works with Application context and internally launches
-        // a QRCodeActivity when needed to display QR codes
+        // Enable verbose logging for debugging (shows all SDK logs including debug level)
+        // Set to Level.INFO for production, Level.FINE for debugging
+        ZetrixLogger.setLevel(ZetrixLogger.Level.FINE)
+
+        // Initialize SDK with Application context
+        // The SDK internally launches a QRCodeActivity when needed to display QR codes
         walletConnect = ZetrixConnectWallet.Builder(applicationContext)
             .setAppType("zetrix")
             .setTestnet(false)
             .setQrcode(true) // Set to false to use deep linking instead
+            .setBridgeUrl("wss://test-wscw1.zetrix.com")
             .build()
 
         // Initialize storage

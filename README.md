@@ -31,16 +31,19 @@ Android SDK for connecting to Zetrix wallet applications (Zetrix Wallet, PIXA, M
 ```kotlin
 dependencies {
     implementation(project(":zetrix-connect-wallet"))
+
+    // Optional: For Kotlin Coroutines + CompletableFuture integration
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.7.3")
 }
 ```
+
+**Note:** The coroutines dependencies are only needed if you want to use Kotlin's `.await()` with CompletableFuture. The SDK itself works without these dependencies.
 
 ## Quick Start
 
 ### 1. Initialize SDK
-
-**Recommended: Use Application Context**
-
-The SDK now supports Application context, which provides better lifecycle management and eliminates tight coupling to Activity context.
 
 ```kotlin
 // In your Activity
@@ -50,7 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize with Application context (recommended)
+        // Initialize SDK
         walletConnect = ZetrixConnectWallet.Builder(applicationContext)
             .setAppType("zetrix")      // "zetrix", "pixa", "myid", "muma"
             .setTestnet(false)         // true for testnet, false for mainnet
@@ -59,32 +62,6 @@ class MainActivity : ComponentActivity() {
 
         // Initialize storage
         walletConnect.initialize()
-    }
-}
-```
-
-**Also works from anywhere:**
-
-```kotlin
-// In a Service
-class MyService : Service() {
-    private lateinit var walletConnect: ZetrixConnectWallet
-
-    override fun onCreate() {
-        super.onCreate()
-        walletConnect = ZetrixConnectWallet.Builder(applicationContext)
-            .setAppType("zetrix")
-            .build()
-        walletConnect.initialize()
-    }
-}
-
-// In a BroadcastReceiver
-class MyReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val walletConnect = ZetrixConnectWallet.Builder(context.applicationContext)
-            .setAppType("zetrix")
-            .build()
     }
 }
 ```
@@ -116,11 +93,11 @@ walletConnect.connect(object : WebSocketCallback {
 
 **Option A: Callback API (Traditional)**
 ```kotlin
-// With QR Code (shows QR automatically)
-walletConnect.auth(true, object : ZetrixConnectWallet.AuthCallback {
+// QR code or deep link is determined by Builder configuration
+walletConnect.auth(object : ZetrixConnectWallet.AuthCallback {
     override fun onSuccess(address: String, sessionId: String) {
         println("Authenticated! Address: $address")
-        // QR code dialog automatically closes on success
+        // QR code activity automatically closes on success
     }
 
     override fun onError(error: String) {
@@ -132,7 +109,7 @@ walletConnect.auth(true, object : ZetrixConnectWallet.AuthCallback {
 **Option B: CompletableFuture API (Recommended)**
 ```kotlin
 // Much cleaner with CompletableFuture!
-walletConnect.authAsync(true)
+walletConnect.authAsync()
     .thenAccept { result ->
         println("Authenticated! Address: ${result.address}")
     }
@@ -145,7 +122,7 @@ walletConnect.authAsync(true)
 **Option C: CompletableFuture with chaining (Java 8+)**
 ```java
 // Chain multiple operations easily
-walletConnect.authAsync(true)
+walletConnect.authAsync()
     .thenCompose(auth -> walletConnect.signMessageAsync("Hello Zetrix!"))
     .thenAccept(signResult -> {
         System.out.println("Signature: " + signResult.signData);
@@ -154,6 +131,20 @@ walletConnect.authAsync(true)
         System.out.println("Error: " + error.getMessage());
         return null;
     });
+```
+
+**Option D: Kotlin Coroutines with CompletableFuture (Kotlin only)**
+```kotlin
+// Requires kotlinx-coroutines-jdk8 dependency
+scope.launch {
+    try {
+        val authResult = walletConnect.authAsync().await()
+        val signResult = walletConnect.signMessageAsync("Hello Zetrix!").await()
+        println("Signature: ${signResult.signData}")
+    } catch (e: Exception) {
+        println("Error: ${e.message}")
+    }
+}
 ```
 
 ### 4. Sign Messages
@@ -231,7 +222,7 @@ The SDK provides **two ways** to handle asynchronous operations:
 
 **Example:**
 ```java
-walletConnect.auth(true, new ZetrixConnectWallet.AuthCallback() {
+walletConnect.auth(new ZetrixConnectWallet.AuthCallback() {
     @Override
     public void onSuccess(String address, String sessionId) {
         System.out.println("Success: " + address);
@@ -259,7 +250,7 @@ walletConnect.auth(true, new ZetrixConnectWallet.AuthCallback() {
 ```kotlin
 // Clean sequential flow
 walletConnect.connectAsync()
-    .thenCompose { walletConnect.authAsync(true) }
+    .thenCompose { walletConnect.authAsync() }
     .thenCompose { walletConnect.signMessageAsync("Hello") }
     .thenAccept { result -> println("Done: ${result.signData}") }
     .exceptionally { error ->
@@ -286,7 +277,7 @@ walletConnect.connectAsync()
 ```kotlin
 walletConnect.connect(object : WebSocketCallback {
     override fun onConnected(authInfo: JSONObject?) {
-        walletConnect.auth(true, object : AuthCallback {
+        walletConnect.auth(object : AuthCallback {
             override fun onSuccess(addr: String, sid: String) {
                 walletConnect.signMessage("Hi", object : SignCallback {
                     override fun onSuccess(a: String, pk: String, sig: String) {
@@ -314,7 +305,7 @@ walletConnect.connect(object : WebSocketCallback {
 
 ```kotlin
 walletConnect.connectAsync()
-    .thenCompose { walletConnect.authAsync(true) }
+    .thenCompose { walletConnect.authAsync() }
     .thenCompose { walletConnect.signMessageAsync("Hi") }
     .thenAccept { result ->
         println("Done: ${result.signData}")
@@ -331,61 +322,22 @@ walletConnect.connectAsync()
 
 **Winner:** CompletableFuture API for cleaner, more maintainable code! 🏆
 
-## Key Improvements in This Version
+## Key Features
 
-### 1. CompletableFuture API Support (NEW!)
+### CompletableFuture API Support
 
-**Problem:** Callback hell makes complex flows hard to read and maintain
-
-**Solution:** Added CompletableFuture-based async methods for all operations
+The SDK provides both callback-based and CompletableFuture-based APIs for all asynchronous operations.
 
 **Benefits:**
 - ✅ Compose multiple operations easily
 - ✅ Single error handling point
 - ✅ Better readability
 - ✅ No external dependencies (Java 8+ built-in)
-- ✅ Works seamlessly with Kotlin
+- ✅ Works seamlessly with Kotlin coroutines
 
-### 2. Application Context Support
+### Automatic QR Code Management
 
-**Before:** SDK required Activity context, causing tight coupling
-
-```kotlin
-// Old way - required Activity context
-val walletConnect = ZetrixConnectWallet.Builder(this) // ❌ Activity context
-    .build()
-```
-
-**Now:** SDK accepts Application context, works anywhere
-
-```kotlin
-// New way - accepts Application context
-val walletConnect = ZetrixConnectWallet.Builder(applicationContext) // ✅ Application context
-    .build()
-```
-
-**Benefits:**
-- ✅ No tight coupling to Activity lifecycle
-- ✅ Can be initialized from Service, BroadcastReceiver, or anywhere
-- ✅ No memory leaks from Activity references
-- ✅ Survives configuration changes (rotation, etc.)
-
-### 2. Fixed QR Code Dialog Auto-Close Issue
-
-**Problem:** QR code dialog sometimes didn't close after successful WebSocket authentication
-
-**Root Cause:** Dialog was created on background thread and returned `null` reference
-
-**Solution:** SDK now uses a dedicated `QRCodeActivity` that listens for broadcast messages to close itself
-
-**Result:**
-- ✅ QR code always closes automatically on successful authentication
-- ✅ Works reliably across all scenarios
-- ✅ Better separation of concerns
-
-### 3. Internal QRCodeActivity
-
-The SDK now has its own internal `QRCodeActivity` for displaying QR codes. Developers don't need to manage this activity - it's handled automatically by the SDK.
+The SDK includes an internal `QRCodeActivity` for displaying QR codes. Developers don't need to manage this activity - it's handled automatically.
 
 **How it works:**
 1. SDK launches `QRCodeActivity` when QR code is needed
@@ -414,7 +366,7 @@ ZetrixConnectWallet.Builder(context)
 |--------------|----------------------|-------------|
 | `initialize()` | - | Initialize SDK (must be called before use) |
 | `connect(callback)` | `connectAsync()` | Connect to WebSocket server |
-| `auth(qrCode, callback)` | `authAsync(qrCode)` | Authenticate user (with QR or deep link) |
+| `auth(callback)` | `authAsync()` | Authenticate user (uses Builder config for QR/deep link) |
 | `authAndSignMessage(msg, callback)` | `authAndSignMessageAsync(msg)` | Authenticate and sign in one step |
 | `signMessage(msg, callback)` | `signMessageAsync(msg)` | Sign a text message |
 | `signBlob(data, callback)` | `signBlobAsync(data)` | Sign binary data |
@@ -479,41 +431,50 @@ interface TransactionCallback {
 
 ## Example App
 
-See the `app` module for a complete example implementation with Jetpack Compose UI demonstrating all SDK features:
+See the `app` module for a complete example implementation with Jetpack Compose UI demonstrating all SDK features.
 
-- WebSocket connection
+**The example app includes TWO tabs to demonstrate both API approaches:**
+
+### Tab 1: Callback API Examples
+Traditional callback-based approach showing:
+- WebSocket connection with callbacks
 - QR code authentication
-- Deep link authentication
+- Auth & Sign Message (combined operation)
 - Message signing
-- Transaction sending
+- Blob signing
+- Transaction sending (with nested callbacks for nonce + send)
 - VC verification
 - VP requests
 
-## Migration Guide
+### Tab 2: CompletableFuture API Examples
+Modern async/await approach showing:
+- WebSocket connection with `connectAsync()`
+- QR code authentication with `authAsync()`
+- Auth & Sign Message with `authAndSignMessageAsync()`
+- Message signing with `signMessageAsync()`
+- Blob signing with `signBlobAsync()`
+- **Transaction sending with clean chaining** (demonstrates the power of CompletableFuture - no nested callbacks!)
+- VC verification with `verifyVCAsync()`
+- VP requests with `getVPAsync()`
 
-### From Old Version (Activity Context) to New Version (Application Context)
+**With Kotlin Coroutines Integration:**
 
-**Step 1:** Update initialization
+The example app demonstrates how to use the CompletableFuture API with Kotlin coroutines for even cleaner code:
 
 ```kotlin
-// Before
-val walletConnect = ZetrixConnectWallet.Builder(this)
-    .setAppType("zetrix")
-    .build()
-
-// After
-val walletConnect = ZetrixConnectWallet.Builder(applicationContext)
-    .setAppType("zetrix")
-    .build()
+scope.launch {
+    try {
+        // Get nonce and send transaction in a clean sequential flow
+        val nonce = walletConnect.getNonceAsync(address, "1").await()
+        val hash = walletConnect.sendTransactionAsync(from, to, amount, gasFee, nonce).await()
+        println("Transaction sent! Hash: $hash")
+    } catch (e: Exception) {
+        println("Failed: ${e.message}")
+    }
+}
 ```
 
-**Step 2:** That's it! All other code remains the same.
-
-The SDK now automatically:
-- Uses Application context internally
-- Launches QRCodeActivity when needed
-- Closes QR codes on successful authentication
-- Works from any Android component (Activity, Service, etc.)
+**Compare the approaches side-by-side** to see which style you prefer for your project!
 
 ## Architecture
 
@@ -524,8 +485,8 @@ The SDK now automatically:
 │     ZetrixConnectWallet (Main)      │
 ├─────────────────────────────────────┤
 │  - Builder pattern initialization   │
-│  - Context: Application (flexible)  │
 │  - Auto QR lifecycle management     │
+│  - Dual API (Callback + Future)     │
 └──────────────┬──────────────────────┘
                │
     ┌──────────┴──────────┐
@@ -546,15 +507,72 @@ The SDK now automatically:
 - **HMAC**: Transaction integrity verification
 - **Session Management**: Secure session ID and address storage
 
+## Logging Configuration
+
+The SDK uses a centralized logging system with configurable log levels.
+
+### Enable Debug Logging
+
+By default, the SDK logs at `INFO` level. To see all debug logs during development:
+
+```kotlin
+// In your MainActivity or Application class
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+
+    // Enable verbose logging (shows all SDK logs including debug level)
+    ZetrixLogger.setLevel(ZetrixLogger.Level.FINE)
+
+    // Initialize SDK...
+}
+```
+
+### Log Levels
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| `FINE` | Debug/verbose logs | Development & debugging |
+| `INFO` | Informational logs | Production (default) |
+| `WARNING` | Warning logs | Production with minimal logging |
+| `SEVERE` | Error logs only | Production with error-only logging |
+| `OFF` | No logs | Disable all logging |
+
+### View Logs in Android Studio
+
+The SDK uses the tag prefix `Zetrix:`. To filter SDK logs in Logcat:
+
+1. Open Android Studio Logcat
+2. Filter by tag: `Zetrix:`
+3. Or filter by package: `com.zetrix.connectwallet`
+
+**Example log tags:**
+- `Zetrix:ZetrixConnectWallet`
+- `Zetrix:WalletSocket`
+- `Zetrix:QRCodeActivity`
+- `Zetrix:DeepLinkHelper`
+
+### Disable Logging
+
+```kotlin
+// Disable all SDK logging
+ZetrixLogger.setLevel(ZetrixLogger.Level.OFF)
+```
+
 ## Troubleshooting
 
 ### QR Code Not Showing
 
-**Solution:** Ensure you're calling `auth(true, callback)` and SDK is connected:
+**Solution:** Ensure you've configured QR code in the Builder and SDK is connected:
 
 ```kotlin
+// Configure QR code in Builder
+val walletConnect = ZetrixConnectWallet.Builder(applicationContext)
+    .setQrcode(true)  // Enable QR code
+    .build()
+
+// Then call auth
 if (walletConnect.isConnected()) {
-    walletConnect.auth(true, callback)
+    walletConnect.auth(callback)
 } else {
     // Connect first
     walletConnect.connect(connectCallback)
