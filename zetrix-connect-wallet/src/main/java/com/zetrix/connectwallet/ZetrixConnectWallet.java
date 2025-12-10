@@ -93,9 +93,7 @@ public class ZetrixConnectWallet {
     /**
      * Private constructor. Use Builder to create instances.
      * <p>
-     * Note: Can accept either Activity or Application context. The SDK will
-     * internally launch a QRCodeActivity when needed to display QR codes.
-     * Using Application context is recommended for better lifecycle management.
+     * The SDK will internally launch a QRCodeActivity when needed to display QR codes.
      * </p>
      */
     private ZetrixConnectWallet(Builder builder) {
@@ -152,10 +150,9 @@ public class ZetrixConnectWallet {
      * Returns the wallet address upon successful authentication.
      * </p>
      *
-     * @param qrCode   if true, show QR code for scanning; if false, use deep link
      * @param callback callback for authentication result
      */
-    public void auth(boolean qrCode, AuthCallback callback) {
+    public void auth(AuthCallback callback) {
         if (!ensureConnected(callback)) return;
 
         try {
@@ -211,7 +208,7 @@ public class ZetrixConnectWallet {
             });
 
             // Launch wallet app or show QR code
-            if (qrCode) {
+            if (isQrcode) {
                 // For QR code: send H5_put to get rms token, then show QR
                 logger.info("Requesting QR code data from server");
 
@@ -284,9 +281,9 @@ public class ZetrixConnectWallet {
      *
      * @param callback callback for authentication result
      */
-    public void auth(AuthCallback callback) {
-        auth(false, callback);
-    }
+//    public void auth(AuthCallback callback) {
+//        auth(callback);
+//    }
 
     /**
      * Authenticate and sign message in a single operation.
@@ -1240,13 +1237,12 @@ public class ZetrixConnectWallet {
     /**
      * Request authentication from wallet (CompletableFuture version).
      *
-     * @param qrCode if true, show QR code; if false, use deep link
      * @return CompletableFuture that completes with AuthResult on success
      */
-    public CompletableFuture<AuthResult> authAsync(boolean qrCode) {
+    public CompletableFuture<AuthResult> authAsync() {
         CompletableFuture<AuthResult> future = new CompletableFuture<>();
 
-        auth(qrCode, new AuthCallback() {
+        auth(new AuthCallback() {
             @Override
             public void onSuccess(String address, String sessionId) {
                 future.complete(new AuthResult(address, sessionId));
@@ -1259,15 +1255,6 @@ public class ZetrixConnectWallet {
         });
 
         return future;
-    }
-
-    /**
-     * Request authentication using default method (CompletableFuture version).
-     *
-     * @return CompletableFuture that completes with AuthResult on success
-     */
-    public CompletableFuture<AuthResult> authAsync() {
-        return authAsync(false);
     }
 
     /**
@@ -1450,9 +1437,7 @@ public class ZetrixConnectWallet {
     /**
      * Builder for ZetrixConnectWallet.
      * <p>
-     * <b>Recommended:</b> Use Application context for better lifecycle management.
-     * The SDK internally launches a QRCodeActivity when needed to display QR codes,
-     * so Activity context is no longer required.
+     * The SDK internally launches a QRCodeActivity when needed to display QR codes.
      * </p>
      */
     public static class Builder {
@@ -1464,29 +1449,15 @@ public class ZetrixConnectWallet {
 
         /**
          * Create a new Builder.
-         * <p>
-         * <b>Recommended:</b> Use {@code getApplicationContext()} for better lifecycle management.
-         * The SDK can now work with both Activity and Application context.
-         * </p>
-         * <p>
-         * Example:
-         * <pre>
-         * // In an Activity
-         * new ZetrixConnectWallet.Builder(getApplicationContext())
          *
-         * // Or in a Service/Fragment/BroadcastReceiver
-         * new ZetrixConnectWallet.Builder(context.getApplicationContext())
-         * </pre>
-         * </p>
-         *
-         * @param context the context (Application context recommended)
+         * @param context the context
          * @throws IllegalArgumentException if context is null
          */
         public Builder(Context context) {
             if (context == null) {
                 throw new IllegalArgumentException("Context cannot be null");
             }
-            // Use Application context internally for better lifecycle management
+            // Store application context internally
             this.context = context.getApplicationContext();
         }
 
