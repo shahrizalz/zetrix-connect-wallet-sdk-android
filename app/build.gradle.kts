@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.exampledapp"
-        minSdk = 21
+        minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -44,6 +44,11 @@ android {
 dependencies {
     // Zetrix Connect Wallet SDK
     implementation(project(":zetrix-connect-wallet"))
+
+    // Kotlin Coroutines for CompletableFuture integration
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.7.3")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
