@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <application>
+        <!-- QR Code Display Activity - Internal SDK activity for showing QR codes -->
+        <activity
+            android:name=".ui.QRCodeActivity"
+            android:theme="@android:style/Theme.Dialog"
+            android:exported="false" />
+    </application>
+
 </manifest>

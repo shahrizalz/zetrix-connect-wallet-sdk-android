@@ -11,7 +11,7 @@ import com.zetrix.connectwallet.helpers.DeepLinkHelper;
 import com.zetrix.connectwallet.helpers.SessionHelper;
 import com.zetrix.connectwallet.helpers.SocketDataBuilder;
 import com.zetrix.connectwallet.helpers.ValidationHelper;
-import com.zetrix.connectwallet.ui.QRCodeDialog;
+import com.zetrix.connectwallet.ui.QRCodeActivity;
 import com.zetrix.connectwallet.utils.CryptoUtils;
 import com.zetrix.connectwallet.utils.DeviceUtils;
 import com.zetrix.connectwallet.utils.StorageUtils;
@@ -23,6 +23,7 @@ import org.json.JSONObject;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Zetrix Connect Wallet SDK for Android.
@@ -91,9 +92,14 @@ public class ZetrixConnectWallet {
 
     /**
      * Private constructor. Use Builder to create instances.
+     * <p>
+     * Note: Can accept either Activity or Application context. The SDK will
+     * internally launch a QRCodeActivity when needed to display QR codes.
+     * Using Application context is recommended for better lifecycle management.
+     * </p>
      */
     private ZetrixConnectWallet(Builder builder) {
-        this.context = builder.context.getApplicationContext();
+        this.context = builder.context;
         this.appType = builder.appType;
         this.isQrcode = builder.isQrcode;
         this.testnet = builder.testnet;
@@ -178,6 +184,10 @@ public class ZetrixConnectWallet {
                                 String address = data.optString("address");
                                 StorageUtils.setAuthData(resSessionId, address);
                                 logger.info("Authentication successful: " + address);
+
+                                // Close QR activity if it's showing
+                                closeQrActivity();
+
                                 callback.onSuccess(address, resSessionId);
                             } else {
                                 callback.onError("No data in response");
@@ -212,7 +222,7 @@ public class ZetrixConnectWallet {
                 Map<String, Object> qrData = new HashMap<>();
                 qrData.put("icon", appPackageId);
                 qrData.put("host", appName);
-                qrData.put("type", authType);
+                qrData.put("type", "H5_" + ZetrixConstants.Operations.AUTH);
                 qrParam.put("data", qrData);
 
                 JSONObject qrSocketData = SocketDataBuilder.createQrSocketData(qrParam, true);
@@ -226,7 +236,7 @@ public class ZetrixConnectWallet {
                                 // Format: "{rms}&{sessionId}&{type}"
                                 String qrCodeData = rms + "&" + sessionId + "&" + authType;
                                 logger.info("Showing QR code for authentication");
-                                QRCodeDialog.show(context, qrCodeData, appType);
+                                QRCodeActivity.launch(context, qrCodeData, appType);
                             } else {
                                 logger.warning("No rms token in response, cannot generate QR code");
                             }
@@ -361,6 +371,9 @@ public class ZetrixConnectWallet {
                                 StorageUtils.setAuthData(resSessionId, address);
                                 logger.info("AuthAndSignMessage successful: " + address);
 
+                                // Close QR activity if it's showing
+                                closeQrActivity();
+
                                 callback.onSuccess(resSessionId, address, publicKey, signData);
                             } else {
                                 callback.onError("No data in response");
@@ -409,7 +422,7 @@ public class ZetrixConnectWallet {
                                 // Format: "{rms}&{sessionId}&{type}"
                                 String qrCodeData = rms + "&" + sessionId + "&" + authAndSignType;
                                 logger.info("Showing QR code for authAndSignMessage");
-                                QRCodeDialog.show(context, qrCodeData, appType);
+                                QRCodeActivity.launch(context, qrCodeData, appType);
                             } else {
                                 logger.warning("No rms token in response, cannot generate QR code");
                             }
@@ -949,6 +962,22 @@ public class ZetrixConnectWallet {
     }
 
     /**
+     * Close the current QR code activity if it's showing.
+     * <p>
+     * This is called automatically when authentication succeeds.
+     * Sends a broadcast to close any open QRCodeActivity instances.
+     * </p>
+     */
+    private void closeQrActivity() {
+        try {
+            QRCodeActivity.closeAll(context);
+            logger.info("QR code activity close broadcast sent");
+        } catch (Exception e) {
+            logger.warning("Error closing QR activity: " + e.getMessage());
+        }
+    }
+
+    /**
      * Disconnect from wallet and clear session data.
      * <p>
      * This method clears stored authentication data (sessionId, address).
@@ -1110,10 +1139,321 @@ public class ZetrixConnectWallet {
         void onSuccess(String uuid);
     }
 
+    // ========== Result Classes for CompletableFuture API ==========
+
+    /**
+     * Result class for authentication operations.
+     */
+    public static class AuthResult {
+        public final String address;
+        public final String sessionId;
+
+        public AuthResult(String address, String sessionId) {
+            this.address = address;
+            this.sessionId = sessionId;
+        }
+    }
+
+    /**
+     * Result class for signing operations.
+     */
+    public static class SignResult {
+        public final String address;
+        public final String publicKey;
+        public final String signData;
+
+        public SignResult(String address, String publicKey, String signData) {
+            this.address = address;
+            this.publicKey = publicKey;
+            this.signData = signData;
+        }
+    }
+
+    /**
+     * Result class for authentication and signing operations.
+     */
+    public static class AuthAndSignResult {
+        public final String sessionId;
+        public final String address;
+        public final String publicKey;
+        public final String signData;
+
+        public AuthAndSignResult(String sessionId, String address, String publicKey, String signData) {
+            this.sessionId = sessionId;
+            this.address = address;
+            this.publicKey = publicKey;
+            this.signData = signData;
+        }
+    }
+
+    /**
+     * Result class for VC verification operations.
+     */
+    public static class VCResult {
+        public final String status;
+        public final String details;
+
+        public VCResult(String status, String details) {
+            this.status = status;
+            this.details = details;
+        }
+    }
+
+    // ========== CompletableFuture API ==========
+
+    /**
+     * Connect to the WebSocket server (CompletableFuture version).
+     * <p>
+     * Returns a CompletableFuture that completes when the connection is established.
+     * </p>
+     *
+     * @return CompletableFuture that completes with authInfo on success
+     */
+    public CompletableFuture<JSONObject> connectAsync() {
+        CompletableFuture<JSONObject> future = new CompletableFuture<>();
+
+        connect(new WebSocketCallback() {
+            @Override
+            public void onConnected(JSONObject authInfo) {
+                future.complete(authInfo);
+            }
+
+            @Override
+            public void onMessage(JSONObject message) {
+                // No-op for this future
+            }
+
+            @Override
+            public void onClosed(int code, String reason) {
+                future.completeExceptionally(new Exception("Connection closed: " + reason));
+            }
+
+            @Override
+            public void onError(Exception error) {
+                future.completeExceptionally(error);
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request authentication from wallet (CompletableFuture version).
+     *
+     * @param qrCode if true, show QR code; if false, use deep link
+     * @return CompletableFuture that completes with AuthResult on success
+     */
+    public CompletableFuture<AuthResult> authAsync(boolean qrCode) {
+        CompletableFuture<AuthResult> future = new CompletableFuture<>();
+
+        auth(qrCode, new AuthCallback() {
+            @Override
+            public void onSuccess(String address, String sessionId) {
+                future.complete(new AuthResult(address, sessionId));
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request authentication using default method (CompletableFuture version).
+     *
+     * @return CompletableFuture that completes with AuthResult on success
+     */
+    public CompletableFuture<AuthResult> authAsync() {
+        return authAsync(false);
+    }
+
+    /**
+     * Authenticate and sign message in a single operation (CompletableFuture version).
+     *
+     * @param message the message to sign
+     * @return CompletableFuture that completes with AuthAndSignResult on success
+     */
+    public CompletableFuture<AuthAndSignResult> authAndSignMessageAsync(String message) {
+        CompletableFuture<AuthAndSignResult> future = new CompletableFuture<>();
+
+        authAndSignMessage(message, new AuthAndSignCallback() {
+            @Override
+            public void onSuccess(String sessionId, String address, String publicKey, String signData) {
+                future.complete(new AuthAndSignResult(sessionId, address, publicKey, signData));
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request wallet to sign a message (CompletableFuture version).
+     *
+     * @param message the message to sign
+     * @return CompletableFuture that completes with SignResult on success
+     */
+    public CompletableFuture<SignResult> signMessageAsync(String message) {
+        CompletableFuture<SignResult> future = new CompletableFuture<>();
+
+        signMessage(message, new SignCallback() {
+            @Override
+            public void onSuccess(String address, String publicKey, String signData) {
+                future.complete(new SignResult(address, publicKey, signData));
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request wallet to sign binary data (CompletableFuture version).
+     *
+     * @param message the blob message to sign
+     * @return CompletableFuture that completes with SignResult on success
+     */
+    public CompletableFuture<SignResult> signBlobAsync(String message) {
+        CompletableFuture<SignResult> future = new CompletableFuture<>();
+
+        signBlob(message, new SignCallback() {
+            @Override
+            public void onSuccess(String address, String publicKey, String signData) {
+                future.complete(new SignResult(address, publicKey, signData));
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Send a transaction through the wallet (CompletableFuture version).
+     *
+     * @param from     sender address
+     * @param to       recipient address
+     * @param amount   transaction amount
+     * @param gasFee   gas fee
+     * @param nonce    account nonce
+     * @return CompletableFuture that completes with transaction hash on success
+     */
+    public CompletableFuture<String> sendTransactionAsync(String from, String to, String amount,
+                                                           String gasFee, long nonce) {
+        CompletableFuture<String> future = new CompletableFuture<>();
+
+        sendTransaction(from, to, amount, gasFee, nonce, new TransactionCallback() {
+            @Override
+            public void onSuccess(String transactionHash) {
+                future.complete(transactionHash);
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Get account nonce from the blockchain (CompletableFuture version).
+     *
+     * @param address  the wallet address
+     * @param chainId  the chain ID ("1" for mainnet, "2" for testnet)
+     * @return CompletableFuture that completes with nonce value on success
+     */
+    public CompletableFuture<Long> getNonceAsync(String address, String chainId) {
+        CompletableFuture<Long> future = new CompletableFuture<>();
+
+        getNonce(address, chainId, new NonceCallback() {
+            @Override
+            public void onSuccess(long nonce) {
+                future.complete(nonce);
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request wallet to verify a Verifiable Credential (CompletableFuture version).
+     *
+     * @param templateId the VC template ID to verify against
+     * @return CompletableFuture that completes with VCResult on success
+     */
+    public CompletableFuture<VCResult> verifyVCAsync(String templateId) {
+        CompletableFuture<VCResult> future = new CompletableFuture<>();
+
+        verifyVC(templateId, new VCCallback() {
+            @Override
+            public void onSuccess(String status, String details) {
+                future.complete(new VCResult(status, details));
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
+    /**
+     * Request wallet to get a Verifiable Presentation (CompletableFuture version).
+     *
+     * @param templateId the VP template ID
+     * @param attributes list of attributes to include in the VP
+     * @return CompletableFuture that completes with VP UUID on success
+     */
+    public CompletableFuture<String> getVPAsync(String templateId, List<String> attributes) {
+        CompletableFuture<String> future = new CompletableFuture<>();
+
+        getVP(templateId, attributes, new VPCallback() {
+            @Override
+            public void onSuccess(String uuid) {
+                future.complete(uuid);
+            }
+
+            @Override
+            public void onError(String error) {
+                future.completeExceptionally(new Exception(error));
+            }
+        });
+
+        return future;
+    }
+
     // ========== Builder Pattern ==========
 
     /**
      * Builder for ZetrixConnectWallet.
+     * <p>
+     * <b>Recommended:</b> Use Application context for better lifecycle management.
+     * The SDK internally launches a QRCodeActivity when needed to display QR codes,
+     * so Activity context is no longer required.
+     * </p>
      */
     public static class Builder {
         private final Context context;
@@ -1122,11 +1462,32 @@ public class ZetrixConnectWallet {
         private boolean testnet = false;
         private String bridgeUrl = null;
 
+        /**
+         * Create a new Builder.
+         * <p>
+         * <b>Recommended:</b> Use {@code getApplicationContext()} for better lifecycle management.
+         * The SDK can now work with both Activity and Application context.
+         * </p>
+         * <p>
+         * Example:
+         * <pre>
+         * // In an Activity
+         * new ZetrixConnectWallet.Builder(getApplicationContext())
+         *
+         * // Or in a Service/Fragment/BroadcastReceiver
+         * new ZetrixConnectWallet.Builder(context.getApplicationContext())
+         * </pre>
+         * </p>
+         *
+         * @param context the context (Application context recommended)
+         * @throws IllegalArgumentException if context is null
+         */
         public Builder(Context context) {
             if (context == null) {
                 throw new IllegalArgumentException("Context cannot be null");
             }
-            this.context = context;
+            // Use Application context internally for better lifecycle management
+            this.context = context.getApplicationContext();
         }
 
         public Builder setAppType(String appType) {

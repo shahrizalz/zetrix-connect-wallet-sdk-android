@@ -3,6 +3,8 @@ package com.zetrix.connectwallet.ui;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.ImageView;
@@ -41,6 +43,23 @@ public class QRCodeDialog {
      * @return AlertDialog instance, or null on error
      */
     public static AlertDialog show(Context context, String qrData, String appType, Runnable dismissCallback) {
+        // Ensure dialog is shown on the UI thread
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // We're on a background thread, post to main thread
+            Handler mainHandler = new Handler(Looper.getMainLooper());
+            mainHandler.post(() -> showOnUiThread(context, qrData, appType, dismissCallback));
+            return null; // Can't return dialog from background thread
+        } else {
+            // We're already on the main thread
+            return showOnUiThread(context, qrData, appType, dismissCallback);
+        }
+    }
+
+    /**
+     * Internal method to show dialog on UI thread.
+     * This method must be called from the main/UI thread.
+     */
+    private static AlertDialog showOnUiThread(Context context, String qrData, String appType, Runnable dismissCallback) {
         try {
             // Generate QR code from data string
             Bitmap qrBitmap = QRCodeGenerator.generateQRCode(qrData);

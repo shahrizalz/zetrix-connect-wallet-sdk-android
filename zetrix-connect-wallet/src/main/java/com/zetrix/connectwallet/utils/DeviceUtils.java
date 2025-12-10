@@ -189,6 +189,18 @@ public final class DeviceUtils {
     }
 
     /**
+     * Get device platform name.
+     * <p>
+     * For Android SDK, this always returns "Android".
+     * </p>
+     *
+     * @return always "Android" for this SDK
+     */
+    public static String getDevicePlatform() {
+        return "Android";
+    }
+
+    /**
      * Get device model name.
      *
      * @return the device model (e.g., "Pixel 6")
