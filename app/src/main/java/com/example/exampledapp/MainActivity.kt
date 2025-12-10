@@ -1,7 +1,6 @@
 package com.example.exampledapp
 
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -22,6 +21,11 @@ import com.zetrix.connectwallet.utils.DeviceUtils
 import com.zetrix.connectwallet.utils.StorageUtils
 import org.json.JSONObject
 import java.util.Arrays
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var walletConnect: ZetrixConnectWallet
@@ -55,6 +59,7 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun ZetrixSDKExampleScreen() {
+        var selectedTab by remember { mutableStateOf(0) }
         var deviceInfo by remember { mutableStateOf("Loading...") }
         var sessionId by remember { mutableStateOf("Not connected") }
         var address by remember { mutableStateOf("Unknown") }
@@ -75,22 +80,90 @@ class MainActivity : ComponentActivity() {
         }
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
+            modifier = Modifier.fillMaxSize()
         ) {
             // Header
             Text(
                 text = "Zetrix SDK Example",
                 style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(16.dp)
             )
 
-            // Device Info
-            Text("Device: $deviceInfo", modifier = Modifier.padding(bottom = 8.dp))
-            Text("Session: $sessionId", modifier = Modifier.padding(bottom = 8.dp))
-            Text("Address: $address", modifier = Modifier.padding(bottom = 24.dp))
+            // Tab Row
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Callback API") }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("CompletableFuture API") }
+                )
+            }
+
+            // Content
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                // Device Info (shared by both tabs)
+                Text("Device: $deviceInfo", modifier = Modifier.padding(bottom = 8.dp))
+                Text("Session: $sessionId", modifier = Modifier.padding(bottom = 8.dp))
+                Text("Address: $address", modifier = Modifier.padding(bottom = 24.dp))
+
+                // Tab Content
+                when (selectedTab) {
+                    0 -> CallbackExamplesContent(
+                        sessionId = sessionId,
+                        address = address,
+                        onSessionUpdate = { newSessionId, newAddress ->
+                            sessionId = newSessionId
+                            address = newAddress
+                        },
+                        onResultUpdate = { result -> lastResult = result }
+                    )
+                    1 -> CompletableFutureExamplesContent(
+                        sessionId = sessionId,
+                        address = address,
+                        onSessionUpdate = { newSessionId, newAddress ->
+                            sessionId = newSessionId
+                            address = newAddress
+                        },
+                        onResultUpdate = { result -> lastResult = result }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Last Result Section (shared by both tabs)
+                SectionHeader("Last Result:")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEEEEEE))
+                ) {
+                    Text(
+                        text = lastResult,
+                        modifier = Modifier.padding(12.dp),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun CallbackExamplesContent(
+        sessionId: String,
+        address: String,
+        onSessionUpdate: (String, String) -> Unit,
+        onResultUpdate: (String) -> Unit
+    ) {
+        Column {
 
             // Connection Section
             SectionHeader("Connection:")
@@ -106,31 +179,28 @@ class MainActivity : ComponentActivity() {
                                     val storedSessionId = StorageUtils.getSessionId()
                                     val storedAddress = StorageUtils.getAddress()
                                     if (storedSessionId != null && storedAddress != null) {
-                                        sessionId = storedSessionId
-                                        address = storedAddress
-                                        lastResult = "Connected (already authenticated)"
+                                        onSessionUpdate(storedSessionId, storedAddress)
+                                        onResultUpdate("Connected (already authenticated)")
                                     } else {
-                                        sessionId = "Connected (ready for auth)"
-                                        lastResult = "Connected successfully"
+                                        onSessionUpdate("Connected (ready for auth)", address)
+                                        onResultUpdate("Connected successfully")
                                     }
                                 }
                             }
 
                             override fun onMessage(message: JSONObject?) {
                                 // Handle incoming WebSocket messages if needed
-                                // For this example app, we don't need to handle raw messages
-                                // as they're handled by the SDK internally
                             }
 
                             override fun onClosed(code: Int, reason: String?) {
                                 runOnUiThread {
-                                    lastResult = "Connection closed: $reason (code: $code)"
+                                    onResultUpdate("Connection closed: $reason (code: $code)")
                                 }
                             }
 
                             override fun onError(error: Exception) {
                                 runOnUiThread {
-                                    lastResult = "Connection error: ${error.message}"
+                                    onResultUpdate("Connection error: ${error.message}")
                                 }
                             }
                         })
@@ -142,18 +212,17 @@ class MainActivity : ComponentActivity() {
 
                 Button(
                     onClick = {
-                        walletConnect.auth(true, object : ZetrixConnectWallet.AuthCallback {
+                        walletConnect.auth(object : ZetrixConnectWallet.AuthCallback {
                             override fun onSuccess(newAddress: String, newSessionId: String) {
                                 runOnUiThread {
-                                    sessionId = newSessionId
-                                    address = newAddress
-                                    lastResult = "Auth Success:\nSessionId: $newSessionId\nAddress: $newAddress"
+                                    onSessionUpdate(newSessionId, newAddress)
+                                    onResultUpdate("Auth Success:\nSessionId: $newSessionId\nAddress: $newAddress")
                                 }
                             }
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "Auth Failed: $error"
+                                    onResultUpdate("Auth Failed: $error")
                                 }
                             }
                         })
@@ -167,9 +236,8 @@ class MainActivity : ComponentActivity() {
                     onClick = {
                         walletConnect.closeConnect()
                         walletConnect.disconnect()
-                        sessionId = "Not connected"
-                        address = "Unknown"
-                        lastResult = "Disconnected"
+                        onSessionUpdate("Not connected", "Unknown")
+                        onResultUpdate("Disconnected")
                     },
                     modifier = Modifier.weight(1f)
                 ) {
@@ -184,19 +252,18 @@ class MainActivity : ComponentActivity() {
                     walletConnect.authAndSignMessage("Auth and sign in one step!", object : ZetrixConnectWallet.AuthAndSignCallback {
                         override fun onSuccess(newSessionId: String, newAddress: String, publicKey: String, signData: String) {
                             runOnUiThread {
-                                sessionId = newSessionId
-                                address = newAddress
-                                lastResult = "AuthAndSignMessage Success:\n" +
+                                onSessionUpdate(newSessionId, newAddress)
+                                onResultUpdate("AuthAndSignMessage Success:\n" +
                                         "SessionId: $newSessionId\n" +
                                         "Address: $newAddress\n" +
                                         "PublicKey: $publicKey\n" +
-                                        "SignData: $signData"
+                                        "SignData: $signData")
                             }
                         }
 
                         override fun onError(error: String) {
                             runOnUiThread {
-                                lastResult = "AuthAndSignMessage Failed: $error"
+                                onResultUpdate("AuthAndSignMessage Failed: $error")
                             }
                         }
                     })
@@ -220,16 +287,16 @@ class MainActivity : ComponentActivity() {
                         walletConnect.signMessage("Hello from Zetrix SDK Android!", object : ZetrixConnectWallet.SignCallback {
                             override fun onSuccess(signerAddress: String, publicKey: String, signData: String) {
                                 runOnUiThread {
-                                    lastResult = "SignMessage Success:\n" +
+                                    onResultUpdate("SignMessage Success:\n" +
                                             "Address: $signerAddress\n" +
                                             "PublicKey: $publicKey\n" +
-                                            "SignData: $signData"
+                                            "SignData: $signData")
                                 }
                             }
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "SignMessage Failed: $error"
+                                    onResultUpdate("SignMessage Failed: $error")
                                 }
                             }
                         })
@@ -244,16 +311,16 @@ class MainActivity : ComponentActivity() {
                         walletConnect.signBlob("AAAAAAbcdef", object : ZetrixConnectWallet.SignCallback {
                             override fun onSuccess(signerAddress: String, publicKey: String, signData: String) {
                                 runOnUiThread {
-                                    lastResult = "SignBlob Success:\n" +
+                                    onResultUpdate("SignBlob Success:\n" +
                                             "Address: $signerAddress\n" +
                                             "PublicKey: $publicKey\n" +
-                                            "SignData: $signData"
+                                            "SignData: $signData")
                                 }
                             }
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "SignBlob Failed: $error"
+                                    onResultUpdate("SignBlob Failed: $error")
                                 }
                             }
                         })
@@ -275,20 +342,20 @@ class MainActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         if (address == "Unknown" || address.isEmpty()) {
-                            lastResult = "GetNonce Failed: Please authenticate first"
+                            onResultUpdate("GetNonce Failed: Please authenticate first")
                             return@Button
                         }
 
                         walletConnect.getNonce(address, "1", object : ZetrixConnectWallet.NonceCallback {
                             override fun onSuccess(nonce: Long) {
                                 runOnUiThread {
-                                    lastResult = "GetNonce Success:\nNonce: $nonce"
+                                    onResultUpdate("GetNonce Success:\nNonce: $nonce")
                                 }
                             }
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "GetNonce Failed: $error"
+                                    onResultUpdate("GetNonce Failed: $error")
                                 }
                             }
                         })
@@ -301,7 +368,7 @@ class MainActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         if (address == "Unknown" || address.isEmpty()) {
-                            lastResult = "SendTransaction Failed: Please authenticate first"
+                            onResultUpdate("SendTransaction Failed: Please authenticate first")
                             return@Button
                         }
 
@@ -318,13 +385,13 @@ class MainActivity : ComponentActivity() {
                                     object : ZetrixConnectWallet.TransactionCallback {
                                         override fun onSuccess(transactionHash: String) {
                                             runOnUiThread {
-                                                lastResult = "SendTransaction Success:\nHash: $transactionHash"
+                                                onResultUpdate("SendTransaction Success:\nHash: $transactionHash")
                                             }
                                         }
 
                                         override fun onError(error: String) {
                                             runOnUiThread {
-                                                lastResult = "SendTransaction Failed: $error"
+                                                onResultUpdate("SendTransaction Failed: $error")
                                             }
                                         }
                                     }
@@ -333,7 +400,7 @@ class MainActivity : ComponentActivity() {
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "SendTransaction Failed: Could not get nonce - $error"
+                                    onResultUpdate("SendTransaction Failed: Could not get nonce - $error")
                                 }
                             }
                         })
@@ -355,20 +422,20 @@ class MainActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         if (address == "Unknown" || address.isEmpty()) {
-                            lastResult = "VerifyVC Failed: Please authenticate first"
+                            onResultUpdate("VerifyVC Failed: Please authenticate first")
                             return@Button
                         }
 
                         walletConnect.verifyVC("example-template-id-123", object : ZetrixConnectWallet.VCCallback {
                             override fun onSuccess(status: String, details: String) {
                                 runOnUiThread {
-                                    lastResult = "VerifyVC Success:\nStatus: $status\nDetails: $details"
+                                    onResultUpdate("VerifyVC Success:\nStatus: $status\nDetails: $details")
                                 }
                             }
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "VerifyVC Failed: $error"
+                                    onResultUpdate("VerifyVC Failed: $error")
                                 }
                             }
                         })
@@ -381,7 +448,7 @@ class MainActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         if (address == "Unknown" || address.isEmpty()) {
-                            lastResult = "GetVP Failed: Please authenticate first"
+                            onResultUpdate("GetVP Failed: Please authenticate first")
                             return@Button
                         }
 
@@ -389,13 +456,13 @@ class MainActivity : ComponentActivity() {
                         walletConnect.getVP("example-template-id-456", attributes, object : ZetrixConnectWallet.VPCallback {
                             override fun onSuccess(uuid: String) {
                                 runOnUiThread {
-                                    lastResult = "GetVP Success:\nUUID: $uuid"
+                                    onResultUpdate("GetVP Success:\nUUID: $uuid")
                                 }
                             }
 
                             override fun onError(error: String) {
                                 runOnUiThread {
-                                    lastResult = "GetVP Failed: $error"
+                                    onResultUpdate("GetVP Failed: $error")
                                 }
                             }
                         })
@@ -405,33 +472,300 @@ class MainActivity : ComponentActivity() {
                     Text("Get VP")
                 }
             }
+        }
+    }
 
-            Spacer(modifier = Modifier.height(24.dp))
+    @Composable
+    fun CompletableFutureExamplesContent(
+        sessionId: String,
+        address: String,
+        onSessionUpdate: (String, String) -> Unit,
+        onResultUpdate: (String) -> Unit
+    ) {
+        val scope = rememberCoroutineScope()
 
-            // Last Result Section
-            SectionHeader("Last Result:")
-            Card(
+        Column {
+            // Connection Section
+            SectionHeader("Connection (Async):")
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFEEEEEE))
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = lastResult,
-                    modifier = Modifier.padding(12.dp),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
-                )
+                Button(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val authInfo = walletConnect.connectAsync().await()
+                                withContext(Dispatchers.Main) {
+                                    val storedSessionId = StorageUtils.getSessionId()
+                                    val storedAddress = StorageUtils.getAddress()
+                                    if (storedSessionId != null && storedAddress != null) {
+                                        onSessionUpdate(storedSessionId, storedAddress)
+                                        onResultUpdate("Connected (already authenticated)")
+                                    } else {
+                                        onSessionUpdate("Connected (ready for auth)", address)
+                                        onResultUpdate("Connected successfully")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("Connection error: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Connect")
+                }
+
+                Button(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val result = walletConnect.authAsync().await()
+                                withContext(Dispatchers.Main) {
+                                    onSessionUpdate(result.sessionId, result.address)
+                                    onResultUpdate("Auth Success:\nSessionId: ${result.sessionId}\nAddress: ${result.address}")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("Auth Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Auth")
+                }
+
+                Button(
+                    onClick = {
+                        walletConnect.closeConnect()
+                        walletConnect.disconnect()
+                        onSessionUpdate("Not connected", "Unknown")
+                        onResultUpdate("Disconnected")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Disconnect")
+                }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // SDK Features Info
-            SectionHeader("SDK Features:")
-            InfoText("✓ QR Code & Deep Linking support")
-            InfoText("✓ WebSocket real-time communication")
-            InfoText("✓ Secure encrypted storage")
-            InfoText("✓ Multiple wallet apps support (Zetrix, PIXA, MyID, MUMA)")
-            InfoText("✓ Complete transaction lifecycle")
-            InfoText("✓ Verifiable Credentials (VC/VP)")
+            Button(
+                onClick = {
+                    scope.launch {
+                        try {
+                            val result = walletConnect.authAndSignMessageAsync("Auth and sign in one step!").await()
+                            withContext(Dispatchers.Main) {
+                                onSessionUpdate(result.sessionId, result.address)
+                                onResultUpdate("AuthAndSignMessage Success:\n" +
+                                        "SessionId: ${result.sessionId}\n" +
+                                        "Address: ${result.address}\n" +
+                                        "PublicKey: ${result.publicKey}\n" +
+                                        "SignData: ${result.signData}")
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                onResultUpdate("AuthAndSignMessage Failed: ${e.message}")
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
+            ) {
+                Text("Auth & Sign Message (Async)")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Signing Operations Section
+            SectionHeader("Signing Operations (Async):")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val result = walletConnect.signMessageAsync("Hello from Zetrix SDK Android!").await()
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("SignMessage Success:\n" +
+                                            "Address: ${result.address}\n" +
+                                            "PublicKey: ${result.publicKey}\n" +
+                                            "SignData: ${result.signData}")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("SignMessage Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Sign Message")
+                }
+
+                Button(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val result = walletConnect.signBlobAsync("AAAAAAbcdef").await()
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("SignBlob Success:\n" +
+                                            "Address: ${result.address}\n" +
+                                            "PublicKey: ${result.publicKey}\n" +
+                                            "SignData: ${result.signData}")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("SignBlob Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Sign Blob")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Transaction Operations Section
+            SectionHeader("Transaction Operations (Async):")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        if (address == "Unknown" || address.isEmpty()) {
+                            onResultUpdate("GetNonce Failed: Please authenticate first")
+                            return@Button
+                        }
+
+                        scope.launch {
+                            try {
+                                val nonce = walletConnect.getNonceAsync(address, "1").await()
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("GetNonce Success:\nNonce: $nonce")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("GetNonce Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Get Nonce")
+                }
+
+                Button(
+                    onClick = {
+                        if (address == "Unknown" || address.isEmpty()) {
+                            onResultUpdate("SendTransaction Failed: Please authenticate first")
+                            return@Button
+                        }
+
+                        // Async/await makes chaining much cleaner!
+                        scope.launch {
+                            try {
+                                // Get nonce
+                                val nonce = walletConnect.getNonceAsync(address, "2").await()
+
+                                // Send transaction
+                                val hash = walletConnect.sendTransactionAsync(
+                                    address,
+                                    "ZTX3QkbTjJsc7xDbwRtuHn826cAYF79uKR3rt",
+                                    "1",
+                                    "0.0001",
+                                    nonce
+                                ).await()
+
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("SendTransaction Success:\nHash: $hash")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("SendTransaction Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Send Transaction")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Verifiable Credentials Section
+            SectionHeader("Verifiable Credentials (Async):")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        if (address == "Unknown" || address.isEmpty()) {
+                            onResultUpdate("VerifyVC Failed: Please authenticate first")
+                            return@Button
+                        }
+
+                        scope.launch {
+                            try {
+                                val result = walletConnect.verifyVCAsync("example-template-id-123").await()
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("VerifyVC Success:\nStatus: ${result.status}\nDetails: ${result.details}")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("VerifyVC Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Verify VC")
+                }
+
+                Button(
+                    onClick = {
+                        if (address == "Unknown" || address.isEmpty()) {
+                            onResultUpdate("GetVP Failed: Please authenticate first")
+                            return@Button
+                        }
+
+                        scope.launch {
+                            try {
+                                val attributes = Arrays.asList("name", "email", "phone")
+                                val uuid = walletConnect.getVPAsync("example-template-id-456", attributes).await()
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("GetVP Success:\nUUID: $uuid")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onResultUpdate("GetVP Failed: ${e.message}")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Get VP")
+                }
+            }
         }
     }
 
