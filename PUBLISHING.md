@@ -25,34 +25,45 @@ This is a multi-module Android project. **Only the library module is published a
 ```
 zetrix-connect-wallet-sdk-android/           ← Root project directory (NOT published)
 │
-├── zetrix-connect-wallet-sdk/              ← LIBRARY MODULE (PUBLISHED as AAR) ✓
+├── zetrix-connect-wallet/                  ← LIBRARY MODULE (PUBLISHED as AAR) ✓
 │   ├── src/
 │   │   └── main/
-│   │       ├── java/com/zetrix/wallet/
+│   │       ├── java/com/zetrix/connectwallet/
+│   │       │   ├── ZetrixConnectWallet.java
+│   │       │   ├── callbacks/
+│   │       │   ├── models/
+│   │       │   ├── network/
+│   │       │   ├── ui/
+│   │       │   └── utils/
 │   │       ├── AndroidManifest.xml
 │   │       └── res/
-│   └── build.gradle                         ← Library build config (publishing config here)
+│   └── build.gradle.kts                     ← Library build config (publishing config here)
 │
-├── example-app/                             ← Example app (NOT published)
+├── app/                                     ← Example app (NOT published)
 │   ├── src/
 │   │   └── main/
-│   │       ├── java/com/zetrix/example/
+│   │       ├── java/com/example/exampledapp/
+│   │       │   ├── MainActivity.kt
+│   │       │   └── ui/
 │   │       └── AndroidManifest.xml
-│   └── build.gradle                         ← App build config
+│   └── build.gradle.kts                     ← App build config
 │
-├── settings.gradle                          ← Includes both modules
-├── build.gradle                             ← Root project build config
+├── settings.gradle.kts                      ← Includes both modules
+├── build.gradle.kts                         ← Root project build config
 ├── gradle.properties                        ← Project-wide properties
 ├── PUBLISHING.md                            ← This guide
 ├── README.md                                ← Project documentation
-└── LICENSE                                  ← License file
+└── LICENSE                                  ← License file (TODO: add if missing)
 ```
 
 **Important:**
-- The **`zetrix-connect-wallet-sdk/`** module contains the library code and is what gets published to Maven repositories
-- The **`example-app/`** is a sample Android application that demonstrates how to use the library
+- The **`zetrix-connect-wallet/`** module contains the library code and is what gets published to Maven repositories
+- The **`app/`** is a sample Android application (Jetpack Compose) that demonstrates how to use the library
 - All publishing commands should be run from the **root directory** (`zetrix-connect-wallet-sdk-android/`)
 - Gradle will automatically build and publish only the library module when configured correctly
+- **Namespace:** `com.zetrix.connectwallet`
+- **Min SDK:** 24 (Android 7.0)
+- **Target/Compile SDK:** 36 (Android 14)
 
 ---
 
@@ -149,27 +160,28 @@ POM_DEVELOPER_EMAIL=your-email@example.com
 
 ### Setup
 
-**1. Configure library/build.gradle:**
+**1. Configure zetrix-connect-wallet/build.gradle.kts:**
 
-```gradle
+```kotlin
 plugins {
-    id 'com.android.library'
-    id 'maven-publish'
+    alias(libs.plugins.android.library)
+    id("maven-publish")
 }
 
 android {
+    namespace = "com.zetrix.connectwallet"
     // ... your android config
 }
 
 afterEvaluate {
     publishing {
         publications {
-            release(MavenPublication) {
-                from components.release
+            create<MavenPublication>("release") {
+                from(components["release"])
 
-                groupId = 'com.zetrix'
-                artifactId = 'wallet-sdk'
-                version = '1.0.0-SNAPSHOT'
+                groupId = "com.zetrix"
+                artifactId = "connect-wallet-sdk"
+                version = "1.0.0-SNAPSHOT"
             }
         }
     }
@@ -179,33 +191,37 @@ afterEvaluate {
 ### Publish Locally
 
 ```bash
-# Navigate to library directory
-cd zetrix-connect-wallet-sdk
+# Navigate to root directory
+cd zetrix-connect-wallet-sdk-android
 
 # Publish to local Maven repository (~/.m2/repository)
-./gradlew publishToMavenLocal
+./gradlew :zetrix-connect-wallet:publishToMavenLocal
 
 # Or publish to custom local directory
-./gradlew publish
+./gradlew :zetrix-connect-wallet:publish
 ```
 
 ### Use in Example App
 
-**example-app/settings.gradle:**
-```gradle
-dependencyResolutionManagement {
-    repositories {
-        mavenLocal()  // Add this
-        google()
-        mavenCentral()
-    }
+**app/build.gradle.kts:**
+```kotlin
+dependencies {
+    // Option 1: Use project dependency (for local development)
+    implementation(project(":zetrix-connect-wallet"))
+
+    // Option 2: Use published artifact (after publishToMavenLocal)
+    // implementation("com.zetrix:connect-wallet-sdk:1.0.0-SNAPSHOT")
 }
 ```
 
-**example-app/build.gradle:**
-```gradle
-dependencies {
-    implementation 'com.zetrix:wallet-sdk:1.0.0-SNAPSHOT'
+**settings.gradle.kts (if using mavenLocal):**
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        mavenLocal()  // Add this to use local Maven
+        google()
+        mavenCentral()
+    }
 }
 ```
 
@@ -228,27 +244,28 @@ dependencies {
 
 ### Setup
 
-**1. Configure library/build.gradle:**
+**1. Configure zetrix-connect-wallet/build.gradle.kts:**
 
-```gradle
+```kotlin
 plugins {
-    id 'com.android.library'
-    id 'maven-publish'
+    alias(libs.plugins.android.library)
+    id("maven-publish")
 }
 
 android {
+    namespace = "com.zetrix.connectwallet"
     // ... your android config
 }
 
 afterEvaluate {
     publishing {
         publications {
-            release(MavenPublication) {
-                from components.release
+            create<MavenPublication>("release") {
+                from(components["release"])
 
-                groupId = 'com.github.your-username'
-                artifactId = 'zetrix-connect-wallet-sdk'
-                version = '1.0.0'
+                groupId = "com.github.your-username"
+                artifactId = "zetrix-connect-wallet-sdk-android"
+                version = "1.0.0"
             }
         }
     }
@@ -259,9 +276,11 @@ afterEvaluate {
 
 ```yaml
 jdk:
-  - openjdk11
+  - openjdk17
 before_install:
-  - sdk install java 11.0.10-open
+  - sdk install java 17.0.2-open
+install:
+  - ./gradlew :zetrix-connect-wallet:build :zetrix-connect-wallet:publishToMavenLocal
 ```
 
 ### Publishing Steps
@@ -286,21 +305,21 @@ before_install:
 
 ### User Installation
 
-Users add to their **settings.gradle**:
-```gradle
+Users add to their **settings.gradle.kts**:
+```kotlin
 dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url 'https://jitpack.io' }  // Add JitPack
+        maven { url = uri("https://jitpack.io") }  // Add JitPack
     }
 }
 ```
 
-And in **build.gradle**:
-```gradle
+And in **build.gradle.kts**:
+```kotlin
 dependencies {
-    implementation 'com.github.your-username:zetrix-connect-wallet-sdk-android:1.0.0'
+    implementation("com.github.your-username:zetrix-connect-wallet-sdk-android:1.0.0")
 }
 ```
 
@@ -355,20 +374,21 @@ dependencies {
 
 ### Setup
 
-**1. Configure library/build.gradle:**
+**1. Configure zetrix-connect-wallet/build.gradle.kts:**
 
-```gradle
+```kotlin
 plugins {
-    id 'com.android.library'
-    id 'maven-publish'
-    id 'signing'
+    alias(libs.plugins.android.library)
+    id("maven-publish")
+    id("signing")
 }
 
 android {
+    namespace = "com.zetrix.connectwallet"
     // ... your android config
 
     publishing {
-        singleVariant('release') {
+        singleVariant("release") {
             withSourcesJar()
             withJavadocJar()
         }
@@ -378,37 +398,37 @@ android {
 afterEvaluate {
     publishing {
         publications {
-            release(MavenPublication) {
-                from components.release
+            create<MavenPublication>("release") {
+                from(components["release"])
 
-                groupId = 'io.github.your-username'
-                artifactId = 'zetrix-wallet-sdk'
-                version = '1.0.0'
+                groupId = "io.github.your-username"
+                artifactId = "zetrix-connect-wallet-sdk"
+                version = "1.0.0"
 
                 pom {
-                    name = 'Zetrix Connect Wallet SDK'
-                    description = 'Android SDK for Zetrix blockchain wallet integration'
-                    url = 'https://github.com/your-username/zetrix-connect-wallet-sdk-android'
+                    name.set("Zetrix Connect Wallet SDK")
+                    description.set("Android SDK for Zetrix blockchain wallet integration")
+                    url.set("https://github.com/your-username/zetrix-connect-wallet-sdk-android")
 
                     licenses {
                         license {
-                            name = 'The Apache License, Version 2.0'
-                            url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                            name.set("The Apache License, Version 2.0")
+                            url.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
                         }
                     }
 
                     developers {
                         developer {
-                            id = 'your-id'
-                            name = 'Your Name'
-                            email = 'your-email@example.com'
+                            id.set("your-id")
+                            name.set("Your Name")
+                            email.set("your-email@example.com")
                         }
                     }
 
                     scm {
-                        connection = 'scm:git:git://github.com/your-username/zetrix-connect-wallet-sdk-android.git'
-                        developerConnection = 'scm:git:ssh://github.com/your-username/zetrix-connect-wallet-sdk-android.git'
-                        url = 'https://github.com/your-username/zetrix-connect-wallet-sdk-android'
+                        connection.set("scm:git:git://github.com/your-username/zetrix-connect-wallet-sdk-android.git")
+                        developerConnection.set("scm:git:ssh://github.com/your-username/zetrix-connect-wallet-sdk-android.git")
+                        url.set("https://github.com/your-username/zetrix-connect-wallet-sdk-android")
                     }
                 }
             }
@@ -417,13 +437,13 @@ afterEvaluate {
         repositories {
             maven {
                 name = "OSSRH"
-                def releasesRepoUrl = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
-                def snapshotsRepoUrl = "https://s01.oss.sonatype.org/content/repositories/snapshots/"
-                url = version.endsWith('SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+                val releasesRepoUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
+                val snapshotsRepoUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
+                url = if (version.toString().endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl
 
                 credentials {
-                    username = project.findProperty("ossrhUsername") ?: System.getenv("OSSRH_USERNAME")
-                    password = project.findProperty("ossrhPassword") ?: System.getenv("OSSRH_PASSWORD")
+                    username = project.findProperty("ossrhUsername")?.toString() ?: System.getenv("OSSRH_USERNAME")
+                    password = project.findProperty("ossrhPassword")?.toString() ?: System.getenv("OSSRH_PASSWORD")
                 }
             }
         }
@@ -431,7 +451,7 @@ afterEvaluate {
 }
 
 signing {
-    sign publishing.publications.release
+    sign(publishing.publications["release"])
 }
 ```
 
@@ -452,7 +472,9 @@ signing.secretKeyRingFile=/absolute/path/to/secring.gpg
 
 1. **Build and publish:**
    ```bash
-   ./gradlew publishReleasePublicationToOSSRHRepository
+   # From root directory
+   cd zetrix-connect-wallet-sdk-android
+   ./gradlew :zetrix-connect-wallet:publishReleasePublicationToOSSRHRepository
    ```
 
 2. **Close and release staging repository:**
@@ -470,9 +492,9 @@ signing.secretKeyRingFile=/absolute/path/to/secring.gpg
 
 Users can now use standard Maven Central:
 
-```gradle
+```kotlin
 dependencies {
-    implementation 'io.github.your-username:zetrix-wallet-sdk:1.0.0'
+    implementation("io.github.your-username:zetrix-connect-wallet-sdk:1.0.0")
 }
 ```
 
@@ -727,5 +749,8 @@ For issues with:
 
 ---
 
-**Last Updated:** 2024-12-09
+**Last Updated:** 2025-12-10
 **SDK Version:** 1.0.0
+**Min SDK:** 24
+**Target SDK:** 36
+**Namespace:** `com.zetrix.connectwallet`
