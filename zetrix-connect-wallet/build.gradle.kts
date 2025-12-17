@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
+    id("maven-publish")
 }
 
 android {
@@ -26,6 +27,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    // Enable publishing for the release variant
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+            withJavadocJar()
+        }
+    }
 }
 
 dependencies {
@@ -49,4 +58,51 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+}
+
+// ============================================================================
+// Maven Publishing Configuration
+// ============================================================================
+
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                from(components["release"])
+
+                // Read from gradle.properties
+                groupId = project.findProperty("GROUP_ID")?.toString() ?: "com.github.shahrizalz"
+                artifactId = project.findProperty("ARTIFACT_ID")?.toString() ?: "zetrix-connect-wallet-sdk"
+                version = project.findProperty("VERSION_NAME")?.toString() ?: "1.0.0"
+
+                pom {
+                    name.set(project.findProperty("POM_NAME")?.toString() ?: "Zetrix Connect Wallet SDK")
+                    description.set(project.findProperty("POM_DESCRIPTION")?.toString() ?: "Android SDK for Zetrix blockchain wallet integration")
+                    url.set(project.findProperty("POM_URL")?.toString() ?: "https://github.com/zetrix-network/zetrix-connect-wallet-sdk-android")
+
+                    licenses {
+                        license {
+                            name.set(project.findProperty("POM_LICENCE_NAME")?.toString() ?: "The Apache Software License, Version 2.0")
+                            url.set(project.findProperty("POM_LICENCE_URL")?.toString() ?: "http://www.apache.org/licenses/LICENSE-2.0.txt")
+                            distribution.set(project.findProperty("POM_LICENCE_DIST")?.toString() ?: "repo")
+                        }
+                    }
+
+                    developers {
+                        developer {
+                            id.set(project.findProperty("POM_DEVELOPER_ID")?.toString() ?: "zetrix-dev")
+                            name.set(project.findProperty("POM_DEVELOPER_NAME")?.toString() ?: "Zetrix Development Team")
+                            email.set(project.findProperty("POM_DEVELOPER_EMAIL")?.toString() ?: "dev@zetrix.com")
+                        }
+                    }
+
+                    scm {
+                        connection.set(project.findProperty("POM_SCM_CONNECTION")?.toString() ?: "scm:git:git://github.com/zetrix-network/zetrix-connect-wallet-sdk-android.git")
+                        developerConnection.set(project.findProperty("POM_SCM_DEV_CONNECTION")?.toString() ?: "scm:git:ssh://git@github.com/zetrix-network/zetrix-connect-wallet-sdk-android.git")
+                        url.set(project.findProperty("POM_SCM_URL")?.toString() ?: "https://github.com/zetrix-network/zetrix-connect-wallet-sdk-android")
+                    }
+                }
+            }
+        }
+    }
 }
